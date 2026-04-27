@@ -92,6 +92,9 @@ _PROVIDER_ALIASES = {
     "github-models": "copilot",
     "github-copilot-acp": "copilot-acp",
     "copilot-acp-agent": "copilot-acp",
+    "claude-code-acp": "claude-acp",
+    "claude-agent-acp": "claude-acp",
+    "claude-acp-agent": "claude-acp",
 }
 
 
@@ -2023,31 +2026,41 @@ def resolve_provider_client(
     if pconfig.auth_type == "external_process":
         creds = resolve_external_process_provider_credentials(provider)
         final_model = _normalize_resolved_model(model or _read_main_model(), provider)
-        if provider == "copilot-acp":
+        if provider in ("copilot-acp", "claude-acp"):
             api_key = str(creds.get("api_key", "")).strip()
             base_url = str(creds.get("base_url", "")).strip()
             command = str(creds.get("command", "")).strip() or None
             args = list(creds.get("args") or [])
             if not final_model:
                 logger.warning(
-                    "resolve_provider_client: copilot-acp requested but no model "
-                    "was provided or configured"
+                    "resolve_provider_client: %s requested but no model "
+                    "was provided or configured", provider
                 )
                 return None, None
             if not api_key or not base_url:
                 logger.warning(
-                    "resolve_provider_client: copilot-acp requested but external "
-                    "process credentials are incomplete"
+                    "resolve_provider_client: %s requested but external "
+                    "process credentials are incomplete", provider
                 )
                 return None, None
-            from agent.copilot_acp_client import CopilotACPClient
+            if provider == "claude-acp":
+                from agent.claude_acp_client import ClaudeACPClient
 
-            client = CopilotACPClient(
-                api_key=api_key,
-                base_url=base_url,
-                command=command,
-                args=args,
-            )
+                client = ClaudeACPClient(
+                    api_key=api_key,
+                    base_url=base_url,
+                    command=command,
+                    args=args,
+                )
+            else:
+                from agent.copilot_acp_client import CopilotACPClient
+
+                client = CopilotACPClient(
+                    api_key=api_key,
+                    base_url=base_url,
+                    command=command,
+                    args=args,
+                )
             logger.debug("resolve_provider_client: %s (%s)", provider, final_model)
             return (_to_async_client(client, final_model) if async_mode
                     else (client, final_model))
