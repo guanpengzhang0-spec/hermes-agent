@@ -28,7 +28,7 @@ declare module '@hermes/ink' {
   export type InputEvent = {
     readonly input: string
     readonly key: Key
-    readonly keypress: { readonly raw?: string }
+    readonly keypress: { readonly isPasted?: boolean; readonly raw?: string }
   }
 
   export type InputHandler = (input: string, key: Key, event: InputEvent) => void
@@ -131,6 +131,7 @@ declare module '@hermes/ink' {
   }
   export function evictInkCaches(level?: EvictLevel): InkCacheSizes
 
+  export function forceRedraw(stdout?: NodeJS.WriteStream): boolean
   export function render(node: React.ReactNode, options?: NodeJS.WriteStream | RenderOptions): Instance
 
   export function useApp(): { readonly exit: (error?: Error) => void }
@@ -144,6 +145,7 @@ declare module '@hermes/ink' {
     readonly clearSelection: () => void
     readonly hasSelection: () => boolean
     readonly getState: () => unknown
+    readonly version: () => number
     readonly subscribe: (cb: () => void) => () => void
     readonly shiftAnchor: (dRow: number, minRow: number, maxRow: number) => void
     readonly shiftSelection: (dRow: number, minRow: number, maxRow: number) => void
