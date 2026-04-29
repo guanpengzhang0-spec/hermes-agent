@@ -177,8 +177,12 @@ class AuditLog:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("audit_log: query failed (%s)", exc)
-        # Sort newest first by ts_ms (Event has ts_ms field per EventStream)
-        events.sort(key=lambda e: getattr(e, "ts_ms", 0), reverse=True)
+        # Sort newest first. Tie-break on id because emit is now sub-ms
+        # (post-WAL-checkpoint-removal), so ts_ms collisions are common.
+        events.sort(
+            key=lambda e: (getattr(e, "ts_ms", 0), getattr(e, "id", 0)),
+            reverse=True,
+        )
         events = events[:limit]
 
         out: list[AuditEntry] = []

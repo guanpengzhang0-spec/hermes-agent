@@ -222,9 +222,15 @@ class EventStream:
                 )
                 row_id = int(cur.lastrowid or 0)
                 self._pending_since_flush += 1
-                if self._pending_since_flush >= self._autoflush_every:
-                    # WAL checkpoint guarantees prior inserts are visible
-                    # to a fresh reader process even if this process dies.
+                # WAL has its own auto-checkpoint cadence (1000 pages);
+                # explicitly checkpointing on every emit was 100x slower
+                # than autocommit alone. We still expose autoflush_every
+                # as a knob for callers that want forced sync, but the
+                # default (1) no longer triggers a checkpoint.
+                if (
+                    self._autoflush_every > 1
+                    and self._pending_since_flush >= self._autoflush_every
+                ):
                     try:
                         self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
                     except sqlite3.Error:
