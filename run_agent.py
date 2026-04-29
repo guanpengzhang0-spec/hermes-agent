@@ -1625,13 +1625,24 @@ class AIAgent:
         # In-memory todo list for task planning (one per agent/session)
         from tools.todo_tool import TodoStore
         self._todo_store = TodoStore()
-        
+
         # Load config once for memory, skills, and compression sections
         try:
             from hermes_cli.config import load_config as _load_agent_config
             _agent_cfg = _load_agent_config()
         except Exception:
             _agent_cfg = {}
+
+        # Optional orchestration bridge — wires LoopDetector / EventStream /
+        # InjectionDefense / Attention / HealthMonitor when enabled in
+        # config.yaml. Default OFF; failure to construct is non-fatal.
+        try:
+            from agent.orchestration_bridge import OrchestrationBridge
+            self._orch_bridge = OrchestrationBridge(
+                session_id=self.session_id, agent_cfg=_agent_cfg
+            )
+        except Exception:
+            self._orch_bridge = None
         # Cache only the derived auxiliary compression context override that is
         # needed later by the startup feasibility check.  Avoid exposing a
         # broad pseudo-public config object on the agent instance.
@@ -2132,7 +2143,15 @@ class AIAgent:
         # Context engine reset (works for both built-in compressor and plugins)
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_reset()
-    
+
+        # Orchestration bridge: reset loop detector / health monitor windows
+        try:
+            bridge = getattr(self, "_orch_bridge", None)
+            if bridge is not None:
+                bridge.reset()
+        except Exception:
+            pass
+
     def _ensure_lmstudio_runtime_loaded(self, config_context_length: Optional[int] = None) -> None:
         """
         Preload the LM Studio model with at least Hermes' minimum context.
@@ -4565,6 +4584,14 @@ class AIAgent:
             if client is not None:
                 self._close_openai_client(client, reason="agent_close", shared=True)
                 self.client = None
+        except Exception:
+            pass
+
+        # 6. Close orchestration bridge (event_stream connection etc.)
+        try:
+            bridge = getattr(self, "_orch_bridge", None)
+            if bridge is not None:
+                bridge.close()
         except Exception:
             pass
 
@@ -8779,7 +8806,13 @@ class AIAgent:
                         "check auxiliary.compression.model in config.yaml."
                     )
 
-        todo_snapshot = self._todo_store.format_for_injection()
+        # Attention block: bridge applies token budget when enabled,
+        # falls back to legacy TodoStore.format_for_injection otherwise.
+        _bridge = getattr(self, "_orch_bridge", None)
+        if _bridge is not None:
+            todo_snapshot = _bridge.attention_block(self._todo_store)
+        else:
+            todo_snapshot = self._todo_store.format_for_injection()
         if todo_snapshot:
             compressed.append({"role": "user", "content": todo_snapshot})
 
@@ -9967,6 +10000,18 @@ class AIAgent:
         # that are invalid UTF-8 and crash JSON serialization in the OpenAI SDK.
         if isinstance(user_message, str):
             user_message = _sanitize_surrogates(user_message)
+
+        # Optional injection-defense scan. USER trust never blocks, so this
+        # is purely an audit trail for the CLI path. Gateway integrations
+        # are expected to scan with their own trust level before reaching
+        # this method (when wired); here we always treat the message as
+        # USER trust to preserve current behaviour.
+        try:
+            _bridge_scan = getattr(self, "_orch_bridge", None)
+            if _bridge_scan is not None and isinstance(user_message, str):
+                _bridge_scan.scan_input(user_message, trust="user")
+        except Exception:
+            pass
         if isinstance(persist_user_message, str):
             persist_user_message = _sanitize_surrogates(persist_user_message)
 
