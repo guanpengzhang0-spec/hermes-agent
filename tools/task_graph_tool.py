@@ -331,3 +331,30 @@ TOOL_SCHEMA: dict[str, Any] = {
 # Optional callable for callers that want to suppress the schema entirely.
 def get_schema(enabled: bool = True) -> Optional[dict[str, Any]]:
     return TOOL_SCHEMA if enabled else None
+
+
+# ─────────────────────────── registry hook ───────────────────────────
+#
+# Schema is published through the standard registry so the LLM sees the
+# tool. The handler here is a stub that is only reachable when the
+# registry's generic dispatch path runs without an agent reference —
+# ``run_agent.py:_invoke_tool`` short-circuits this tool name to call
+# ``task_graph_tool(agent=self, ...)`` with the bridge in scope.
+def _check_task_graph_requirements() -> bool:
+    """Schema is always discoverable; runtime gating happens via the
+    bridge/config inside the handler itself."""
+    return True
+
+
+from tools.registry import registry  # noqa: E402
+
+registry.register(
+    name="task_graph",
+    toolset="orchestration",
+    schema=TOOL_SCHEMA["function"],
+    handler=lambda args, **kw: task_graph_tool(
+        agent=kw.get("agent"), **(args or {})
+    ),
+    check_fn=_check_task_graph_requirements,
+    emoji="🧩",
+)

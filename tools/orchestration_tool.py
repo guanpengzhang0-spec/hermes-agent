@@ -352,3 +352,24 @@ TOOL_SCHEMA: dict[str, Any] = {
         },
     },
 }
+
+
+# ─────────────────────────── registry hook ───────────────────────────
+
+
+def _check_orchestration_requirements() -> bool:
+    return True
+
+
+from tools.registry import registry  # noqa: E402
+
+registry.register(
+    name="orchestration",
+    toolset="orchestration",
+    schema=TOOL_SCHEMA["function"],
+    handler=lambda args, **kw: orchestration_tool(
+        agent=kw.get("agent"), **(args or {})
+    ),
+    check_fn=_check_orchestration_requirements,
+    emoji="🎼",
+)

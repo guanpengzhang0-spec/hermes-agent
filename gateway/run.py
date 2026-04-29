@@ -801,6 +801,13 @@ class GatewayRunner:
         self.adapters: Dict[Platform, BasePlatformAdapter] = {}
         self._warn_if_docker_media_delivery_is_risky()
 
+        # Lazily-built shared InjectionDefense for the gateway-trust scan
+        # in _prepare_inbound_message_text. Stateless module — one instance
+        # is reused across all inbound messages. None means "not yet tried"
+        # or "config disabled / module unavailable".
+        self._gateway_injection_defense: Any = None
+        self._gateway_injection_init_attempted: bool = False
+
         # Load ephemeral config from config.yaml / env vars.
         # Both are injected at API-call time only and never persisted.
         self._prefill_messages = self._load_prefill_messages()
@@ -4384,6 +4391,60 @@ class GatewayRunner:
                 if hasattr(self, "_busy_ack_ts"):
                     self._busy_ack_ts.pop(_quick_key, None)
 
+    def _gateway_inject_scan(self, text: str) -> Optional[Dict[str, Any]]:
+        """Scan ``text`` with InjectionDefense at GATEWAY trust level.
+
+        Returns ``{"blocked": bool, "risk": str, "matched": [...], "sanitized": str}``
+        or ``None`` when the subsystem is disabled / unavailable.
+
+        The InjectionDefense instance is constructed lazily on first call
+        and cached on ``self``. Errors during construction are recorded
+        once and subsequent calls become no-ops.
+        """
+        if not self._gateway_injection_init_attempted:
+            self._gateway_injection_init_attempted = True
+            try:
+                from hermes_cli.config import load_config as _load_full_config
+                cfg = _load_full_config() or {}
+                node = cfg
+                for part in ("orchestration", "injection_defense"):
+                    if not isinstance(node, dict):
+                        node = {}
+                        break
+                    node = node.get(part, {})
+                if isinstance(node, dict) and node.get("enabled"):
+                    from orchestration.injection_defense import (
+                        InjectionDefense,
+                        InjectionRisk,
+                    )
+                    threshold_str = str(node.get("block_threshold", "high")).lower()
+                    self._gateway_injection_defense = InjectionDefense(
+                        rules_disabled=frozenset(node.get("rules_disabled", []) or []),
+                        max_input_chars=int(node.get("max_input_chars", 50_000)),
+                        block_threshold=InjectionRisk(threshold_str),
+                    )
+            except Exception as exc:
+                logger.info(
+                    "gateway: injection_defense unavailable (%s) — disabled", exc
+                )
+                self._gateway_injection_defense = None
+
+        defense = self._gateway_injection_defense
+        if defense is None:
+            return None
+        try:
+            from orchestration.injection_defense import TrustLevel
+            result = defense.scan(text or "", TrustLevel.GATEWAY)
+            return {
+                "blocked": defense.should_block(result),
+                "risk": result.risk.value,
+                "matched": list(result.matched_rules),
+                "sanitized": result.sanitized,
+            }
+        except Exception as exc:
+            logger.debug("gateway: scan failed (%s)", exc)
+            return None
+
     async def _prepare_inbound_message_text(
         self,
         *,
@@ -4408,6 +4469,27 @@ class GatewayRunner:
         message_text = event.text or ""
         # Reset per-call buffer; set only when native routing is chosen.
         self._pending_native_image_paths = []
+
+        # Optional gateway-trust injection-defense scan. Stateless module —
+        # constructed once per call; cheap. Returns None (skip) when the
+        # subsystem is disabled in config or import fails. When BLOCKED at
+        # the configured threshold the inbound message is dropped silently
+        # (still logged) so a malicious sender can't see the rejection.
+        if message_text:
+            try:
+                _scan = self._gateway_inject_scan(message_text)
+                if _scan is not None and _scan.get("blocked"):
+                    logger.warning(
+                        "gateway: dropped inbound (injection_defense): "
+                        "platform=%s user=%s risk=%s rules=%s",
+                        getattr(source, "platform", "?"),
+                        getattr(source, "user_name", "?"),
+                        _scan.get("risk"),
+                        _scan.get("matched"),
+                    )
+                    return None
+            except Exception as exc:
+                logger.debug("gateway: injection_defense skipped (%s)", exc)
 
         _is_shared_multi_user = is_shared_multi_user_session(
             source,

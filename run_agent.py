@@ -8969,6 +8969,15 @@ class AIAgent:
                 merge=function_args.get("merge", False),
                 store=self._todo_store,
             )
+        elif function_name == "task_graph":
+            from tools.task_graph_tool import task_graph_tool as _task_graph_tool
+            return _task_graph_tool(agent=self, **(function_args or {}))
+        elif function_name == "audit_log":
+            from tools.audit_log_tool import audit_log_tool as _audit_log_tool
+            return _audit_log_tool(agent=self, **(function_args or {}))
+        elif function_name == "orchestration":
+            from tools.orchestration_tool import orchestration_tool as _orch_tool
+            return _orch_tool(agent=self, **(function_args or {}))
         elif function_name == "session_search":
             if not self._session_db:
                 return json.dumps({"success": False, "error": "Session database not available."})
@@ -9507,6 +9516,17 @@ class AIAgent:
                 tool_duration = time.time() - tool_start_time
                 if self._should_emit_quiet_tool_messages():
                     self._vprint(f"  {_get_cute_tool_message_impl('todo', function_args, tool_duration, result=function_result)}")
+            elif function_name in ("task_graph", "audit_log", "orchestration"):
+                # Orchestration-borrow tool surfaces — need the live agent
+                # reference to reach OrchestrationBridge.
+                if function_name == "task_graph":
+                    from tools.task_graph_tool import task_graph_tool as _t
+                elif function_name == "audit_log":
+                    from tools.audit_log_tool import audit_log_tool as _t
+                else:
+                    from tools.orchestration_tool import orchestration_tool as _t
+                function_result = _t(agent=self, **(function_args or {}))
+                tool_duration = time.time() - tool_start_time
             elif function_name == "session_search":
                 if not self._session_db:
                     function_result = json.dumps({"success": False, "error": "Session database not available."})
